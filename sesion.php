@@ -17,7 +17,12 @@ $success = '';
 $api_response = ''; // Para depuración
 $extracted_data_raw = ''; // Para mostrar datos extraídos
 
-if ($_SERVER["REQUEST_METHOD"] == "POST" && (isset($_FILES['boleta']) || isset($_POST['captured_image']))) {
+// Inicializar variable de sesión para datos temporales
+if (!isset($_SESSION['pending_data'])) {
+    $_SESSION['pending_data'] = null;
+}
+
+if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $upload_dir = 'Uploads/';
     if (!is_dir($upload_dir)) {
         mkdir($upload_dir, 0755, true);
@@ -48,11 +53,39 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && (isset($_FILES['boleta']) || isset($
         if (!file_put_contents($file_path, $decoded_image)) {
             $error = "Error al guardar la imagen capturada.";
         }
+    } elseif (isset($_POST['confirm_save'])) {
+        // Guardar datos editados
+        $params = [
+            'usuario_id' => $_SESSION['user_id'],
+            'tipo_comprobante' => $_POST['tipo_comprobante'] ?? 'Boleta',
+            'serie_numero' => $_POST['serie_numero'] ?? '',
+            'fecha' => $_POST['fecha'] ?? date('Y-m-d'),
+            'moneda' => $_POST['moneda'] ?? 'PEN',
+            'documento_identidad' => $_POST['documento_identidad'] ?? '',
+            'nombre_cliente' => $_POST['nombre_cliente'] ?? '',
+            'subtotal' => floatval($_POST['subtotal'] ?? 0.00),
+            'igv' => floatval($_POST['igv'] ?? 0.00),
+            'importe_total' => floatval($_POST['importe_total'] ?? 0.00),
+            'imagen_ruta' => $_SESSION['pending_data']['imagen_ruta'] ?? ''
+        ];
+        try {
+            $stmt = $conn->prepare("INSERT INTO gastos (usuario_id, tipo_comprobante, serie_numero, fecha, moneda, documento_identidad, nombre_cliente, subtotal, igv, importe_total, imagen_ruta) VALUES (:usuario_id, :tipo_comprobante, :serie_numero, :fecha, :moneda, :documento_identidad, :nombre_cliente, :subtotal, :igv, :importe_total, :imagen_ruta)");
+            $stmt->execute($params);
+            $_SESSION['pending_data'] = null; // Limpiar datos temporales
+            header("Location: report.php");
+            exit;
+        } catch (Exception $e) {
+            $error = "Error al guardar los datos: " . $e->getMessage();
+        }
+    } elseif (isset($_POST['clear_pending'])) {
+        // Limpiar datos temporales si se cancela
+        $_SESSION['pending_data'] = null;
+        exit;
     } else {
         $error = "No se recibió ninguna imagen.";
     }
 
-    if (!$error) {
+    if (!$error && ($file_path || isset($_POST['captured_image']))) {
         try {
             $base64_image = base64_encode(file_get_contents($file_path));
             $api_key = "4b3b890b3d2e4c06a892674f5660f7a6";
@@ -107,9 +140,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && (isset($_FILES['boleta']) || isset($
                 if (json_last_error() !== JSON_ERROR_NONE) {
                     $error = "La API no devolvió un JSON válido. Error: " . json_last_error_msg() . ". Respuesta: " . htmlspecialchars($extracted_data_raw);
                 } else {
-                    // Depuración: Mostrar datos extraídos
-                    error_log("Datos extraídos: " . print_r($extracted_data, true));
-
                     // Mapear y validar datos
                     $tipo_comprobante = $extracted_data['tipo_comprobante'] ?? null;
                     $serie_numero = $extracted_data['serie_y_numero'] ?? null;
@@ -118,33 +148,27 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && (isset($_FILES['boleta']) || isset($
                         $fecha = "$matches[3]-$matches[2]-$matches[1]"; // Convertir a YYYY-MM-DD
                     }
                     $moneda = $extracted_data['moneda'] ?? null;
-                    $documento_identidad = $extracted_data['documento_de_identidad'] ?? null; // Ajustado para coincidir con la tabla
+                    $documento_identidad = $extracted_data['documento_de_identidad'] ?? null;
                     $nombre_cliente = $extracted_data['nombre_del_cliente'] ?? null;
                     $subtotal = floatval($extracted_data['subtotal'] ?? 0.00);
                     $igv = floatval($extracted_data['igv'] ?? 0.00);
                     $importe_total = floatval($extracted_data['importe_total'] ?? 0.00);
 
-                    // Depuración de parámetros antes de la ejecución
-                    $params = [
+                    // Almacenar datos temporalmente en la sesión
+                    $_SESSION['pending_data'] = [
                         'usuario_id' => $_SESSION['user_id'],
                         'tipo_comprobante' => $tipo_comprobante ?? 'Boleta',
                         'serie_numero' => $serie_numero ?? '',
                         'fecha' => $fecha ?? date('Y-m-d'),
                         'moneda' => $moneda ?? 'PEN',
-                        'documento_identidad' => $documento_identidad ?? '', // Ajustado para coincidir con la tabla
+                        'documento_identidad' => $documento_identidad ?? '',
                         'nombre_cliente' => $nombre_cliente ?? '',
                         'subtotal' => $subtotal,
                         'igv' => $igv,
                         'importe_total' => $importe_total,
                         'imagen_ruta' => $file_path
                     ];
-                    error_log("Parámetros para la consulta: " . print_r($params, true));
-
-                    // Insertar en la base de datos
-                    $stmt = $conn->prepare("INSERT INTO gastos (usuario_id, tipo_comprobante, serie_numero, fecha, moneda, documento_identidad, nombre_cliente, subtotal, igv, importe_total, imagen_ruta) VALUES (:usuario_id, :tipo_comprobante, :serie_numero, :fecha, :moneda, :documento_identidad, :nombre_cliente, :subtotal, :igv, :importe_total, :imagen_ruta)");
-                    $stmt->execute($params);
-
-                    $success = "Gasto registrado exitosamente.";
+                    error_log("Datos temporales almacenados: " . print_r($_SESSION['pending_data'], true));
                 }
             } else {
                 $error = "No se pudieron extraer los datos de la boleta. Respuesta API: " . htmlspecialchars($response_data['error'] ?? 'Sin detalles');
@@ -176,9 +200,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && (isset($_FILES['boleta']) || isset($
         <?php if ($success): ?>
             <div id="success-message" class="text-green-500 text-center mb-4"><?php echo htmlspecialchars($success); ?></div>
         <?php endif; ?>
-        <?php if ($extracted_data_raw): ?>
+        <?php if ($_SESSION['pending_data']): ?>
             <div class="text-center mb-4">
-                <button id="openJsonModal" class="json-modal-open">Ver Datos Extraídos</button>
+                <button id="openJsonModal" class="json-modal-open">Ver y Editar Datos Extraídos</button>
             </div>
         <?php endif; ?>
         <div class="space-y-6">
@@ -202,12 +226,55 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && (isset($_FILES['boleta']) || isset($
         </div>
     </div>
 
-    <!-- Modal para mostrar datos extraídos -->
+    <!-- Modal para editar datos extraídos -->
     <div id="jsonModal" class="json-modal">
         <div class="json-modal-content">
             <span class="json-modal-close">×</span>
-            <h3 class="text-lg font-semibold text-yellow-400 mb-4">Datos Extraídos</h3>
-            <pre><?php echo htmlspecialchars($extracted_data_raw); ?></pre>
+            <h3 class="text-lg font-semibold text-yellow-400 mb-4">Editar Datos Extraídos</h3>
+            <?php if ($_SESSION['pending_data']): ?>
+                <form id="editForm" method="POST" action="sesion.php" class="space-y-4">
+                    <div>
+                        <label for="tipo_comprobante" class="block text-sm font-medium text-gray-300">Tipo de Comprobante</label>
+                        <input type="text" id="tipo_comprobante" name="tipo_comprobante" value="<?php echo htmlspecialchars($_SESSION['pending_data']['tipo_comprobante']); ?>" class="mt-1 block w-full bg-gray-800 border border-gray-700 rounded-md p-2 text-white focus:outline-none focus:ring-2 focus:ring-yellow-400">
+                    </div>
+                    <div>
+                        <label for="serie_numero" class="block text-sm font-medium text-gray-300">Serie y Número</label>
+                        <input type="text" id="serie_numero" name="serie_numero" value="<?php echo htmlspecialchars($_SESSION['pending_data']['serie_numero']); ?>" class="mt-1 block w-full bg-gray-800 border border-gray-700 rounded-md p-2 text-white focus:outline-none focus:ring-2 focus:ring-yellow-400">
+                    </div>
+                    <div>
+                        <label for="fecha" class="block text-sm font-medium text-gray-300">Fecha</label>
+                        <input type="date" id="fecha" name="fecha" value="<?php echo htmlspecialchars($_SESSION['pending_data']['fecha']); ?>" class="mt-1 block w-full bg-gray-800 border border-gray-700 rounded-md p-2 text-white focus:outline-none focus:ring-2 focus:ring-yellow-400">
+                    </div>
+                    <div>
+                        <label for="moneda" class="block text-sm font-medium text-gray-300">Moneda</label>
+                        <input type="text" id="moneda" name="moneda" value="<?php echo htmlspecialchars($_SESSION['pending_data']['moneda']); ?>" class="mt-1 block w-full bg-gray-800 border border-gray-700 rounded-md p-2 text-white focus:outline-none focus:ring-2 focus:ring-yellow-400">
+                    </div>
+                    <div>
+                        <label for="documento_identidad" class="block text-sm font-medium text-gray-300">Documento de Identidad</label>
+                        <input type="text" id="documento_identidad" name="documento_identidad" value="<?php echo htmlspecialchars($_SESSION['pending_data']['documento_identidad']); ?>" class="mt-1 block w-full bg-gray-800 border border-gray-700 rounded-md p-2 text-white focus:outline-none focus:ring-2 focus:ring-yellow-400">
+                    </div>
+                    <div>
+                        <label for="nombre_cliente" class="block text-sm font-medium text-gray-300">Nombre del Cliente</label>
+                        <input type="text" id="nombre_cliente" name="nombre_cliente" value="<?php echo htmlspecialchars($_SESSION['pending_data']['nombre_cliente']); ?>" class="mt-1 block w-full bg-gray-800 border border-gray-700 rounded-md p-2 text-white focus:outline-none focus:ring-2 focus:ring-yellow-400">
+                    </div>
+                    <div>
+                        <label for="subtotal" class="block text-sm font-medium text-gray-300">Subtotal</label>
+                        <input type="number" step="0.01" id="subtotal" name="subtotal" value="<?php echo htmlspecialchars($_SESSION['pending_data']['subtotal']); ?>" class="mt-1 block w-full bg-gray-800 border border-gray-700 rounded-md p-2 text-white focus:outline-none focus:ring-2 focus:ring-yellow-400">
+                    </div>
+                    <div>
+                        <label for="igv" class="block text-sm font-medium text-gray-300">IGV</label>
+                        <input type="number" step="0.01" id="igv" name="igv" value="<?php echo htmlspecialchars($_SESSION['pending_data']['igv']); ?>" class="mt-1 block w-full bg-gray-800 border border-gray-700 rounded-md p-2 text-white focus:outline-none focus:ring-2 focus:ring-yellow-400">
+                    </div>
+                    <div>
+                        <label for="importe_total" class="block text-sm font-medium text-gray-300">Importe Total</label>
+                        <input type="number" step="0.01" id="importe_total" name="importe_total" value="<?php echo htmlspecialchars($_SESSION['pending_data']['importe_total']); ?>" class="mt-1 block w-full bg-gray-800 border border-gray-700 rounded-md p-2 text-white focus:outline-none focus:ring-2 focus:ring-yellow-400">
+                    </div>
+                    <div class="mt-4 text-center">
+                        <button type="submit" name="confirm_save" value="yes" class="bg-green-500 text-white px-4 py-2 rounded-md mr-2 hover:bg-green-600">Sí</button>
+                        <button type="button" id="confirmNo" class="bg-red-500 text-white px-4 py-2 rounded-md hover:bg-red-600">No</button>
+                    </div>
+                </form>
+            <?php endif; ?>
         </div>
     </div>
 

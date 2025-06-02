@@ -184,3 +184,33 @@ video {
 .json-modal-open:hover {
     background-color: #fbbf24;
 }
+
+/* Asegurar que los botones en el modal sean visibles y funcionales */
+.json-modal-content .mt-4 {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+}
+
+#confirmYes, #confirmNo {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+#confirmYes:hover {
+    background-color: #34d399; /* Verde más claro al pasar el mouse */
+}
+
+#confirmNo:hover {
+    background-color: #ef4444; /* Rojo más claro al pasar el mouse */
+}
+
+/* Resto de los estilos existentes... */
+
+.json-modal-content input {
+    width: 100%;
+    margin-bottom: 10px;
+}

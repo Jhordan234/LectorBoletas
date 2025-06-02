@@ -82,7 +82,7 @@ $importes_totales_json = json_encode($importes_totales);
     <nav class="bg-gray-900 text-white p-4 shadow-lg sticky top-0 z-50">
         <div class="container mx-auto flex justify-between items-center">
             <div class="text-3xl font-bold text-yellow-400">
-                <a href="index.php">King Soft</a>
+                <a href="index.php">SMART-EXPENSE</a>
             </div>
             <div class="space-x-6">
                 <a href="sesion.php" class="hover:text-yellow-400 transition">Registrar Boleta</a>

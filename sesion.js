@@ -1,6 +1,10 @@
 const video = document.getElementById('video');
 const canvas = document.getElementById('canvas');
 const captureButton = document.getElementById('capture');
+const jsonModal = document.getElementById('jsonModal');
+const openJsonModal = document.getElementById('openJsonModal');
+const closeJsonModal = document.querySelector('.json-modal-close');
+const confirmNo = document.getElementById('confirmNo');
 
 if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
     navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
@@ -29,11 +33,6 @@ captureButton.addEventListener('click', () => {
     form.submit();
 });
 
-// JavaScript para el modal de datos extraídos
-const jsonModal = document.getElementById('jsonModal');
-const openJsonModal = document.getElementById('openJsonModal');
-const closeJsonModal = document.querySelector('.json-modal-close');
-
 if (openJsonModal) {
     openJsonModal.addEventListener('click', () => {
         jsonModal.style.display = 'flex';
@@ -46,8 +45,30 @@ if (closeJsonModal) {
     });
 }
 
+if (confirmNo) {
+    confirmNo.addEventListener('click', () => {
+        jsonModal.style.display = 'none';
+        // Limpiar datos temporales
+        fetch('sesion.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: 'clear_pending=true'
+        });
+    });
+}
+
 window.addEventListener('click', (e) => {
     if (e.target === jsonModal) {
         jsonModal.style.display = 'none';
+        // Limpiar datos temporales al cerrar el modal
+        fetch('sesion.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: 'clear_pending=true'
+        });
     }
 });

@@ -16,7 +16,7 @@
     <!-- Navigation Bar -->
     <nav class="bg-gray-900 text-white p-4 shadow-lg sticky top-0 z-50">
         <div class="container mx-auto flex justify-between items-center">
-            <div class="text-3xl font-bold">KING SOFT-BOLETAS</div>
+            <div class="text-3xl font-bold">SMART-EXPENSE</div>
             <div class="space-x-6">
                 <a href="login.php" class="hover:text-yellow-400 transition">Cargar Boleta</a>
                 <a href="login.php" class="hover:text-yellow-400 transition">Reportes</a>
