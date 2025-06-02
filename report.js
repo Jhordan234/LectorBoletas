@@ -114,4 +114,45 @@ window.addEventListener('load', () => {
     document.querySelectorAll('.fade-in').forEach((element, index) => {
         element.style.animationDelay = `${index * 0.2}s`;
     });
+
+    // Generar el gráfico de barras con Chart.js
+    const ctx = document.getElementById('gastosChart').getContext('2d');
+    new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: chartLabels, // Ejemplo: ["Gasto #1", "Gasto #2", ...]
+            datasets: [{
+                label: 'Importe Total (PEN)',
+                data: chartData, // Ejemplo: [630, 22, ...]
+                backgroundColor: '#f4b400',
+                borderColor: '#f4a400',
+                borderWidth: 1
+            }]
+        },
+        options: {
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    grid: {
+                        color: 'rgba(255, 255, 255, 0.1)'
+                    },
+                    ticks: {
+                        color: '#ffffff'
+                    }
+                },
+                x: {
+                    ticks: {
+                        color: '#ffffff'
+                    }
+                }
+            },
+            plugins: {
+                legend: {
+                    labels: {
+                        color: '#ffffff'
+                    }
+                }
+            }
+        }
+    });
 });

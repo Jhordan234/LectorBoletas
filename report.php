@@ -52,15 +52,15 @@ foreach ($campos as $campo => $info) {
 }
 $datos_por_campo_json = json_encode($datos_por_campo);
 
-// Generar datos para el gráfico (suma de todos los gastos)
-$total_subtotal = 0;
-$total_igv = 0;
-$total_importe = 0;
+// Preparar datos para el gráfico (una barra por cada gasto)
+$labels = [];
+$importes_totales = [];
 foreach ($gastos as $gasto) {
-    $total_subtotal += floatval($gasto['subtotal']);
-    $total_igv += floatval($gasto['igv']);
-    $total_importe += floatval($gasto['importe_total']);
+    $labels[] = "Gasto #" . $gasto['id'];
+    $importes_totales[] = floatval($gasto['importe_total']);
 }
+$labels_json = json_encode($labels);
+$importes_totales_json = json_encode($importes_totales);
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -72,6 +72,8 @@ foreach ($gastos as $gasto) {
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Font Awesome for icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <!-- Custom CSS -->
     <link rel="stylesheet" href="report.css">
 </head>
@@ -166,11 +168,11 @@ foreach ($gastos as $gasto) {
                     </div>
                 </div>
 
-                <!-- Gráfico de barras -->
+                <!-- Gráfico de barras con Chart.js -->
                 <div class="mt-12 fade-in">
-                    <h3 class="text-2xl font-semibold text-yellow-400 mb-4">Reporte de Gastos (Totales)</h3>
+                    <h3 class="text-2xl font-semibold text-yellow-400 mb-4">Reporte de Gastos (Por Gasto)</h3>
                     <div id="chart-container" class="bg-gray-800 rounded-lg shadow-lg p-6">
-                        <img src="chart.png" alt="Reporte de Gastos" class="w-full max-w-2xl mx-auto">
+                        <canvas id="gastosChart" width="400" height="200"></canvas>
                     </div>
                 </div>
             <?php endif; ?>
@@ -197,33 +199,12 @@ foreach ($gastos as $gasto) {
     <!-- Custom JavaScript -->
     <script>
         const datosPorCampo = <?php echo $datos_por_campo_json; ?>;
+        const chartLabels = <?php echo $labels_json; ?>;
+        const chartData = <?php echo $importes_totales_json; ?>;
     </script>
     <script src="report.js"></script>
 </body>
 </html>
 <?php
-// Generar gráfico con matplotlib (se generará después de instalar matplotlib)
-if (!empty($gastos)) {
-    $script = <<<EOD
-import matplotlib.pyplot as plt
-import numpy as np
-
-labels = ['Subtotal', 'IGV', 'Total']
-values = [$total_subtotal, $total_igv, $total_importe]
-
-plt.figure(figsize=(8, 6))
-plt.bar(labels, values, color=['#f4b400', '#f4a400', '#f48000'])
-plt.title('Reporte de Gastos (Totales)')
-plt.xlabel('Categoría')
-plt.ylabel('Monto (PEN)')
-plt.grid(True, axis='y', linestyle='--', alpha=0.7)
-
-plt.savefig('chart.png')
-plt.close()
-EOD;
-
-    file_put_contents('generate_chart.py', $script);
-    // No ejecutamos exec aquí hasta que instalemos matplotlib
-}
 ob_end_flush();
 ?>
