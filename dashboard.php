@@ -938,6 +938,43 @@
             // location.reload();
             console.log('Auto-refresh check...');
         }, 300000); // 5 minutes
-    </script>
+
+
+function deleteExpense(id) {
+    if (confirm("¿Seguro que quieres eliminar este gasto?")) {
+        fetch("acciones_gasto.php", {
+            method: "POST",
+            headers: {"Content-Type": "application/x-www-form-urlencoded"},
+            body: "action=delete&id=" + id
+        }).then(res => res.text()).then(data => {
+            if (data === "ok") {
+                alert("Gasto eliminado correctamente");
+                location.reload();
+            } else {
+                alert("Error al eliminar");
+            }
+        });
+    }
+}
+
+function editExpense(id) {
+    let nombre = prompt("Nuevo nombre del cliente:");
+    let total = prompt("Nuevo importe total:");
+    if (nombre && total) {
+        fetch("acciones_gasto.php", {
+            method: "POST",
+            headers: {"Content-Type": "application/x-www-form-urlencoded"},
+            body: `action=edit&id=${id}&nombre_cliente=${encodeURIComponent(nombre)}&importe_total=${total}`
+        }).then(res => res.text()).then(data => {
+            if (data === "ok") {
+                alert("Gasto actualizado correctamente");
+                location.reload();
+            } else {
+                alert("Error al actualizar");
+            }
+        });
+    }
+}
+</script>
 </body>
 </html>
