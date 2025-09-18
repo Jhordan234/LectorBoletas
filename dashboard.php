@@ -534,20 +534,19 @@
                         <button onclick="showImage('<?= $row['imagen_ruta'] ?>')" class="text-yellow-400 hover:text-yellow-300">
                             <i class="fas fa-image"></i> Ver
                         </button>
-                    </td>
-                    <td class="py-3 px-4">
-                        <div class="flex items-center space-x-2">
-                            <button class="text-yellow-400 hover:text-yellow-300" title="Ver detalles">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                            <button class="text-blue-400 hover:text-blue-300" title="Editar">
-                                <i class="fas fa-edit"></i>
-                            </button>
-                            <button class="text-red-400 hover:text-red-300" title="Eliminar">
-                                <i class="fas fa-trash"></i>
-                            </button>
-                        </div>
-                    </td>
+                        <td class="py-3 px-4">
+    <div class="flex items-center space-x-2">
+        <button onclick="viewExpense(<?= $row['id'] ?>)" class="text-yellow-400 hover:text-yellow-300" title="Ver detalles">
+            <i class="fas fa-eye"></i>
+        </button>
+        <button onclick="editExpense(<?= $row['id'] ?>)" class="text-blue-400 hover:text-blue-300" title="Editar">
+            <i class="fas fa-edit"></i>
+        </button>
+        <button onclick="deleteExpense(<?= $row['id'] ?>)" class="text-red-400 hover:text-red-300" title="Eliminar">
+            <i class="fas fa-trash"></i>
+        </button>
+    </div>
+</td>
                 </tr>
                 <?php
                     endforeach;
