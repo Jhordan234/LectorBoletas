@@ -87,6 +87,7 @@ $importes_totales_json = json_encode($importes_totales);
             <div class="space-x-6">
                 <a href="sesion.php" class="hover:text-yellow-400 transition">Registrar Boleta</a>
                 <a href="logout.php" class="hover:text-yellow-400 transition">Cerrar Sesión</a>
+                <a href="dashboard.php" class="hover:text-yellow-400 transition">Dashboard</a>
             </div>
         </div>
     </nav>
@@ -170,7 +171,7 @@ $importes_totales_json = json_encode($importes_totales);
 
                 <!-- Gráfico de barras con Chart.js -->
                 <div class="mt-12 fade-in">
-                    <h3 class="text-2xl font-semibold text-yellow-400 mb-4">Reporte de Gastos (Por Gasto)</h3>
+                    <h3 class="text-2xl font-semibold text-yellow-400 mb-4">Grafico de Gastos</h3>
                     <div id="chart-container" class="bg-gray-800 rounded-lg shadow-lg p-6">
                         <canvas id="gastosChart" width="400" height="200"></canvas>
                     </div>
@@ -190,7 +191,7 @@ $importes_totales_json = json_encode($importes_totales);
     <!-- Modal para detalles -->
     <div id="detailModal" class="modal">
         <div class="modal-content">
-            <span class="close-modal-detail">×</span>
+            <span class="close-modal-detail"></span>
             <h3 id="detailTitle" class="text-lg font-semibold text-yellow-400 mb-2"></h3>
             <div id="detailValues" class="text-white text-center"></div>
         </div>
