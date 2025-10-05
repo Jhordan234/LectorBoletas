@@ -1,3 +1,95 @@
+<?php
+session_start();
+if (!isset($_SESSION['user_id'])) {
+    header('Location: login.php');
+    exit;
+}
+include 'config.php';
+
+// Total de TODOS los gastos (sin filtro de mes)
+$sql_total = "SELECT SUM(importe_total) AS total_gastos FROM gastos";
+$stmt_total = $conn->prepare($sql_total);
+$stmt_total->execute();
+$total_gastos = $stmt_total->fetch(PDO::FETCH_ASSOC)['total_gastos'] ?? 0;
+
+// Total del mes anterior para comparación
+$sql_prev = "SELECT SUM(importe_total) AS total_gastos_prev
+             FROM gastos
+             WHERE EXTRACT(MONTH FROM fecha) = EXTRACT(MONTH FROM CURRENT_DATE - INTERVAL '1 month')
+             AND EXTRACT(YEAR FROM fecha) = EXTRACT(YEAR FROM CURRENT_DATE - INTERVAL '1 month')";
+$stmt_prev = $conn->prepare($sql_prev);
+$stmt_prev->execute();
+$total_gastos_prev = $stmt_prev->fetch(PDO::FETCH_ASSOC)['total_gastos_prev'] ?? 0;
+$porcentaje_cambio = $total_gastos_prev > 0 ? (($total_gastos - $total_gastos_prev) / $total_gastos_prev) * 100 : 0;
+
+// Estadísticas de gastos por tipo_comprobante (TODOS los registros)
+$sql_estadisticas = "SELECT tipo_comprobante, COUNT(*) AS cantidad
+                     FROM gastos
+                     GROUP BY tipo_comprobante
+                     ORDER BY cantidad DESC LIMIT 3";
+$stmt_estadisticas = $conn->prepare($sql_estadisticas);
+$stmt_estadisticas->execute();
+$estadisticas = $stmt_estadisticas->fetchAll(PDO::FETCH_ASSOC);
+$total_gastos_mes = array_sum(array_column($estadisticas, 'cantidad'));
+$estadisticas = array_map(function($item) use ($total_gastos_mes) {
+    $item['porcentaje'] = $total_gastos_mes > 0 ? ($item['cantidad'] / $total_gastos_mes) * 100 : 0;
+    return $item;
+}, $estadisticas);
+
+// Datos para el gráfico principal (por mes del año actual)
+$sql_chart = "SELECT TO_CHAR(fecha, 'Mon') AS mes, SUM(importe_total) AS total
+              FROM gastos
+              WHERE EXTRACT(YEAR FROM fecha) = EXTRACT(YEAR FROM CURRENT_DATE)
+              GROUP BY TO_CHAR(fecha, 'Mon'), EXTRACT(MONTH FROM fecha)
+              ORDER BY EXTRACT(MONTH FROM fecha)";
+$stmt_chart = $conn->prepare($sql_chart);
+$stmt_chart->execute();
+$gastos_por_mes = $stmt_chart->fetchAll(PDO::FETCH_ASSOC);
+$labels = [];
+$data = [];
+foreach ($gastos_por_mes as $row) {
+    $labels[] = $row['mes'];
+    $data[] = (float)$row['total'];
+}
+$labels_json = json_encode($labels);
+$data_json = json_encode($data);
+
+// Datos para el mini gráfico
+$sql_mini_chart = "SELECT TO_CHAR(fecha, 'IW') AS semana, SUM(importe_total) AS total
+                   FROM gastos
+                   WHERE EXTRACT(MONTH FROM fecha) = EXTRACT(MONTH FROM CURRENT_DATE)
+                   GROUP BY TO_CHAR(fecha, 'IW'), EXTRACT(WEEK FROM fecha)
+                   ORDER BY EXTRACT(WEEK FROM fecha)";
+$stmt_mini_chart = $conn->prepare($sql_mini_chart);
+$stmt_mini_chart->execute();
+$gastos_por_semana = $stmt_mini_chart->fetchAll(PDO::FETCH_ASSOC);
+$mini_labels = [];
+$mini_data = [];
+foreach ($gastos_por_semana as $row) {
+    $mini_labels[] = "Sem " . $row['semana'];
+    $mini_data[] = (float)$row['total'];
+}
+$mini_labels_json = json_encode($mini_labels);
+$mini_data_json = json_encode($mini_data);
+
+// Gastos por categoría
+$sql_categorias = "SELECT tipo_comprobante, COUNT(*) AS cantidad, SUM(importe_total) AS total
+                   FROM gastos
+                   WHERE EXTRACT(MONTH FROM fecha) = EXTRACT(MONTH FROM CURRENT_DATE)
+                   GROUP BY tipo_comprobante";
+$stmt_categorias = $conn->prepare($sql_categorias);
+$stmt_categorias->execute();
+$categorias = $stmt_categorias->fetchAll(PDO::FETCH_ASSOC);
+
+// Actividad reciente
+$sql_actividad = "SELECT tipo_comprobante, fecha
+                  FROM gastos
+                  ORDER BY fecha DESC LIMIT 3";
+$stmt_actividad = $conn->prepare($sql_actividad);
+$stmt_actividad->execute();
+$actividad_reciente = $stmt_actividad->fetchAll(PDO::FETCH_ASSOC);
+?>
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -8,33 +100,69 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        body { 
+            background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
+            position: relative;
+            overflow-x: hidden;
+        }
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: 
+                radial-gradient(circle at 20% 50%, rgba(120, 119, 198, 0.3) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(255, 135, 135, 0.3) 0%, transparent 50%),
+                radial-gradient(circle at 40% 90%, rgba(168, 239, 255, 0.3) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 0;
+        }
         .glass {
-            background: rgba(255, 255, 255, 0.05);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
         }
         .card-hover {
-            transition: all 0.3s ease;
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            position: relative;
+            overflow: hidden;
+        }
+        .card-hover::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+            transition: left 0.5s;
+        }
+        .card-hover:hover::before {
+            left: 100%;
         }
         .card-hover:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 20px 40px rgba(0,0,0,0.2);
-        }
-        .progress-ring {
-            transition: stroke-dashoffset 0.35s;
-            transform: rotate(-90deg);
-            transform-origin: 50% 50%;
+            transform: translateY(-8px) scale(1.02);
+            box-shadow: 0 20px 60px rgba(139, 92, 246, 0.3);
+            border-color: rgba(139, 92, 246, 0.3);
         }
         .fade-in {
-            animation: fadeIn 0.8s ease-in;
+            animation: fadeIn 1s ease-in;
         }
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(20px); }
+            from { opacity: 0; transform: translateY(30px); }
             to { opacity: 1; transform: translateY(0); }
         }
-        .metric-card {
-            background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%);
+        .glow-text {
+            text-shadow: 0 0 20px rgba(251, 191, 36, 0.5),
+                         0 0 40px rgba(251, 191, 36, 0.3);
+        }
+        .neon-border {
+            box-shadow: 0 0 10px rgba(139, 92, 246, 0.5),
+                        0 0 20px rgba(139, 92, 246, 0.3),
+                        inset 0 0 10px rgba(139, 92, 246, 0.2);
         }
         .modal {
             display: none;
@@ -44,38 +172,63 @@
             top: 0;
             width: 100%;
             height: 100%;
-            background-color: rgba(0,0,0,0.8);
-            backdrop-filter: blur(5px);
+            background-color: rgba(0,0,0,0.9);
+            backdrop-filter: blur(10px);
         }
         .modal-content {
-            background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%);
-            backdrop-filter: blur(15px);
-            border: 1px solid rgba(255,255,255,0.1);
+            background: linear-gradient(135deg, rgba(15, 12, 41, 0.95) 0%, rgba(48, 43, 99, 0.95) 100%);
+            backdrop-filter: blur(20px);
+            border: 2px solid rgba(139, 92, 246, 0.3);
             margin: 5% auto;
-            padding: 20px;
-            border-radius: 15px;
+            padding: 30px;
+            border-radius: 20px;
             width: 80%;
             max-width: 600px;
             position: relative;
+            box-shadow: 0 0 40px rgba(139, 92, 246, 0.4);
         }
         .close-modal {
             color: #fff;
             float: right;
-            font-size: 28px;
+            font-size: 32px;
             font-weight: bold;
             cursor: pointer;
             position: absolute;
-            right: 15px;
-            top: 10px;
+            right: 20px;
+            top: 15px;
+            transition: all 0.3s;
         }
         .close-modal:hover {
             color: #fbbf24;
+            transform: rotate(90deg);
         }
         #modalImage {
             width: 100%;
             max-height: 500px;
             object-fit: contain;
-            border-radius: 10px;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+        }
+        .pulse {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: .7; }
+        }
+        .stat-icon {
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.2) 0%, rgba(59, 130, 246, 0.2) 100%);
+            padding: 12px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(139, 92, 246, 0.3);
+        }
+        nav {
+            position: relative;
+            z-index: 100;
+        }
+        .container-wrapper {
+            position: relative;
+            z-index: 1;
         }
     </style>
 </head>
@@ -84,7 +237,7 @@
     <nav class="glass border-b border-white/10 p-4 sticky top-0 z-50">
         <div class="max-w-7xl mx-auto flex justify-between items-center">
             <div class="flex items-center space-x-4">
-                <div class="text-2xl font-bold text-white">
+                <div class="text-2xl font-bold text-white glow-text">
                     <i class="fas fa-chart-line mr-2 text-yellow-400"></i>
                     SMART-EXPENSE
                 </div>
@@ -95,12 +248,12 @@
                     <span>Registrar Boleta</span>
                 </a>
                 <div class="flex items-center space-x-2">
-                    <div class="w-8 h-8 bg-yellow-400 rounded-full flex items-center justify-center">
-                        <i class="fas fa-user text-black text-sm"></i>
+                    <div class="w-8 h-8 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center neon-border">
+                        <i class="fas fa-user text-white text-sm"></i>
                     </div>
-                    <span class="text-sm">Usuario</span>
+                    <span class="text-sm font-semibold"><?php echo htmlspecialchars($_SESSION['username'] ?? 'Usuario'); ?></span>
                 </div>
-                <a href="logout.php" class="hover:text-yellow-400 transition">
+                <a href="logout.php" class="hover:text-red-400 transition">
                     <i class="fas fa-sign-out-alt"></i>
                 </a>
             </div>
@@ -108,82 +261,68 @@
     </nav>
 
     <!-- Main Dashboard -->
-    <div class="max-w-7xl mx-auto p-6 space-y-6">
+    <div class="max-w-7xl mx-auto p-6 space-y-6 container-wrapper">
         
         <!-- Top Row - Overview Stats -->
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 fade-in">
             <!-- Total Revenue Card -->
-            <div class="glass rounded-2xl p-6 card-hover">
+            <div class="glass rounded-2xl p-6 card-hover neon-border">
                 <div class="flex items-center justify-between mb-4">
                     <h3 class="text-gray-300 text-sm font-medium">Ingresos Totales</h3>
-                    <i class="fas fa-arrow-up text-green-400"></i>
+                    <div class="stat-icon">
+                        <i class="fas fa-arrow-up text-green-400 text-xl"></i>
+                    </div>
                 </div>
-                <div class="text-3xl font-bold text-white mb-2">S/9,542.00</div>
+                <div class="text-3xl font-bold text-white mb-2 glow-text">S/<?php echo number_format($total_gastos, 2); ?></div>
                 <div class="flex items-center text-sm">
-                    <span class="bg-red-500/20 text-red-400 px-2 py-1 rounded-full text-xs">-5.1%</span>
+                    <span class="<?php echo $porcentaje_cambio >= 0 ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'; ?> px-3 py-1 rounded-full text-xs font-semibold"><?php echo number_format($porcentaje_cambio, 1); ?>%</span>
                     <span class="text-gray-400 ml-2">vs mes anterior</span>
                 </div>
                 <div class="mt-4">
                     <div class="flex justify-between text-xs text-gray-400 mb-1">
-                        <span>Ganancia Neta: S/3,526.56</span>
-                        <span>Ingreso Neto: S/5,324.85</span>
+                        <span>Ganancia Neta: S/<?php echo number_format($total_gastos * 0.37, 2); ?></span>
+                        <span>Ingreso Neto: S/<?php echo number_format($total_gastos * 0.56, 2); ?></span>
                     </div>
                 </div>
             </div>
 
             <!-- Orders Stats -->
-            <div class="glass rounded-2xl p-6 card-hover">
+            <div class="glass rounded-2xl p-6 card-hover neon-border">
                 <div class="flex items-center justify-between mb-4">
                     <h3 class="text-gray-300 text-sm font-medium">Estadísticas de Gastos</h3>
-                    <i class="fas fa-chart-pie text-blue-400"></i>
+                    <div class="stat-icon">
+                        <i class="fas fa-chart-pie text-blue-400 text-xl"></i>
+                    </div>
                 </div>
                 <div class="space-y-3">
+                    <?php foreach ($estadisticas as $index => $stat): ?>
                     <div class="flex items-center justify-between">
                         <div class="flex items-center space-x-2">
-                            <div class="w-3 h-3 bg-blue-500 rounded-full"></div>
-                            <span class="text-sm text-gray-300">Completados</span>
+                            <div class="w-3 h-3 <?php echo $index === 0 ? 'bg-blue-500' : ($index === 1 ? 'bg-green-500' : 'bg-purple-500'); ?> rounded-full pulse"></div>
+                            <span class="text-sm text-gray-300"><?php echo htmlspecialchars($stat['tipo_comprobante']); ?></span>
                         </div>
                         <div class="text-right">
-                            <div class="text-white font-semibold">56,236</div>
-                            <div class="text-blue-400 text-xs">90.2%</div>
+                            <div class="text-white font-semibold"><?php echo number_format($stat['cantidad']); ?></div>
+                            <div class="text-blue-400 text-xs"><?php echo number_format($stat['porcentaje'], 1); ?>%</div>
                         </div>
                     </div>
-                    <div class="flex items-center justify-between">
-                        <div class="flex items-center space-x-2">
-                            <div class="w-3 h-3 bg-green-500 rounded-full"></div>
-                            <span class="text-sm text-gray-300">En Proceso</span>
-                        </div>
-                        <div class="text-right">
-                            <div class="text-white font-semibold">12,596</div>
-                            <div class="text-green-400 text-xs">6.7%</div>
-                        </div>
-                    </div>
-                    <div class="flex items-center justify-between">
-                        <div class="flex items-center space-x-2">
-                            <div class="w-3 h-3 bg-red-500 rounded-full"></div>
-                            <span class="text-sm text-gray-300">Cancelados</span>
-                        </div>
-                        <div class="text-right">
-                            <div class="text-white font-semibold">1,568</div>
-                            <div class="text-red-400 text-xs">3.0%</div>
-                        </div>
-                    </div>
+                    <?php endforeach; ?>
                 </div>
             </div>
 
             <!-- Quick Actions -->
-            <div class="glass rounded-2xl p-6 card-hover">
+            <div class="glass rounded-2xl p-6 card-hover neon-border">
                 <h3 class="text-gray-300 text-sm font-medium mb-4">Acciones Rápidas</h3>
                 <div class="space-y-3">
-                    <button onclick="window.location.href='sesion.php'" class="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-medium py-2 px-4 rounded-lg transition flex items-center justify-center space-x-2">
+                    <button onclick="window.location.href='sesion.php'" class="w-full bg-gradient-to-r from-yellow-400 to-orange-500 hover:from-yellow-500 hover:to-orange-600 text-black font-medium py-2 px-4 rounded-lg transition flex items-center justify-center space-x-2 shadow-lg">
                         <i class="fas fa-plus"></i>
                         <span>Nuevo Gasto</span>
                     </button>
-                    <button onclick="exportData()" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition flex items-center justify-center space-x-2">
+                    <button onclick="exportData()" class="w-full bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white font-medium py-2 px-4 rounded-lg transition flex items-center justify-center space-x-2 shadow-lg">
                         <i class="fas fa-download"></i>
                         <span>Exportar</span>
                     </button>
-                    <button onclick="generateReport()" class="w-full bg-purple-500 hover:bg-purple-600 text-white font-medium py-2 px-4 rounded-lg transition flex items-center justify-center space-x-2">
+                    <button onclick="generateReport()" class="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-medium py-2 px-4 rounded-lg transition flex items-center justify-center space-x-2 shadow-lg">
                         <i class="fas fa-chart-bar"></i>
                         <span>Reportes</span>
                     </button>
@@ -191,36 +330,20 @@
             </div>
 
             <!-- Recent Activity -->
-            <div class="glass rounded-2xl p-6 card-hover">
+            <div class="glass rounded-2xl p-6 card-hover neon-border">
                 <h3 class="text-gray-300 text-sm font-medium mb-4">Actividad Reciente</h3>
                 <div class="space-y-3">
+                    <?php foreach ($actividad_reciente as $index => $actividad): ?>
                     <div class="flex items-center space-x-3">
-                        <div class="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center">
-                            <i class="fas fa-check text-white text-xs"></i>
+                        <div class="w-8 h-8 <?php echo $index === 0 ? 'bg-gradient-to-r from-green-500 to-emerald-500' : ($index === 1 ? 'bg-gradient-to-r from-blue-500 to-cyan-500' : 'bg-gradient-to-r from-purple-500 to-pink-500'); ?> rounded-full flex items-center justify-center shadow-lg">
+                            <i class="fas fa-receipt text-white text-xs"></i>
                         </div>
                         <div class="flex-1">
-                            <p class="text-sm text-white">Gasto registrado</p>
-                            <p class="text-xs text-gray-400">hace 2 horas</p>
+                            <p class="text-sm text-white font-medium"><?php echo htmlspecialchars($actividad['tipo_comprobante']); ?> registrado</p>
+                            <p class="text-xs text-gray-400"><?php echo date('d/m/Y H:i', strtotime($actividad['fecha'])); ?></p>
                         </div>
                     </div>
-                    <div class="flex items-center space-x-3">
-                        <div class="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center">
-                            <i class="fas fa-file-invoice text-white text-xs"></i>
-                        </div>
-                        <div class="flex-1">
-                            <p class="text-sm text-white">Boleta procesada</p>
-                            <p class="text-xs text-gray-400">hace 4 horas</p>
-                        </div>
-                    </div>
-                    <div class="flex items-center space-x-3">
-                        <div class="w-8 h-8 bg-purple-500 rounded-full flex items-center justify-center">
-                            <i class="fas fa-chart-line text-white text-xs"></i>
-                        </div>
-                        <div class="flex-1">
-                            <p class="text-sm text-white">Reporte generado</p>
-                            <p class="text-xs text-gray-400">ayer</p>
-                        </div>
-                    </div>
+                    <?php endforeach; ?>
                 </div>
             </div>
         </div>
@@ -229,13 +352,13 @@
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
             
             <!-- Chart Section -->
-            <div class="lg:col-span-2 glass rounded-2xl p-6 card-hover fade-in">
+            <div class="lg:col-span-2 glass rounded-2xl p-6 card-hover fade-in neon-border">
                 <div class="flex items-center justify-between mb-6">
-                    <h3 class="text-xl font-semibold text-white">Resumen de Gastos</h3>
+                    <h3 class="text-xl font-semibold text-white glow-text">Resumen de Gastos</h3>
                     <div class="flex items-center space-x-4">
-                        <select class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400">
+                        <select id="chartPeriod" class="bg-gray-800/50 border border-purple-500/30 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
                             <option>Anual</option>
-                            <option>Mensual</option>
+                            <option selected>Mensual</option>
                             <option>Semanal</option>
                         </select>
                     </div>
@@ -246,96 +369,33 @@
             </div>
 
             <!-- Social Media Stats / Categories -->
-            <div class="glass rounded-2xl p-6 card-hover fade-in">
+            <div class="glass rounded-2xl p-6 card-hover fade-in neon-border">
                 <div class="flex items-center justify-between mb-6">
-                    <h3 class="text-xl font-semibold text-white">Gastos por Categoría</h3>
-                    <select class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm">
-                        <option>Mensual</option>
+                    <h3 class="text-xl font-semibold text-white glow-text">Gastos por Categoría</h3>
+                    <select class="bg-gray-800/50 border border-purple-500/30 rounded-lg px-3 py-2 text-white text-sm">
+                        <option selected>Mensual</option>
                         <option>Semanal</option>
                         <option>Anual</option>
                     </select>
                 </div>
-                
                 <div class="space-y-4">
-                    <div class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
+                    <?php foreach ($categorias as $categoria): ?>
+                    <div class="flex items-center justify-between p-3 bg-gray-800/30 rounded-lg border border-purple-500/20 hover:border-purple-500/40 transition">
                         <div class="flex items-center space-x-3">
-                            <div class="w-10 h-10 bg-blue-500 rounded-lg flex items-center justify-center">
+                            <div class="w-10 h-10 bg-gradient-to-r from-blue-500 to-purple-500 rounded-lg flex items-center justify-center shadow-lg">
                                 <i class="fas fa-receipt text-white"></i>
                             </div>
                             <div>
-                                <p class="text-white font-medium">Boletas</p>
-                                <p class="text-gray-400 text-sm">4.2k gastos</p>
+                                <p class="text-white font-medium"><?php echo htmlspecialchars($categoria['tipo_comprobante']); ?></p>
+                                <p class="text-gray-400 text-sm"><?php echo number_format($categoria['cantidad']); ?> gastos</p>
                             </div>
                         </div>
                         <div class="text-right">
-                            <p class="text-white font-semibold">4,562</p>
-                            <p class="text-green-400 text-sm">+20%</p>
+                            <p class="text-white font-semibold">S/<?php echo number_format($categoria['total'], 2); ?></p>
+                            <p class="text-green-400 text-sm">+0%</p>
                         </div>
                     </div>
-
-                    <div class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
-                        <div class="flex items-center space-x-3">
-                            <div class="w-10 h-10 bg-cyan-500 rounded-lg flex items-center justify-center">
-                                <i class="fas fa-file-invoice text-white"></i>
-                            </div>
-                            <div>
-                                <p class="text-white font-medium">Facturas</p>
-                                <p class="text-gray-400 text-sm">3.7k gastos</p>
-                            </div>
-                        </div>
-                        <div class="text-right">
-                            <p class="text-white font-semibold">1,652</p>
-                            <p class="text-green-400 text-sm">+5%</p>
-                        </div>
-                    </div>
-
-                    <div class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
-                        <div class="flex items-center space-x-3">
-                            <div class="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
-                                <i class="fas fa-money-check text-white"></i>
-                            </div>
-                            <div>
-                                <p class="text-white font-medium">Recibos</p>
-                                <p class="text-gray-400 text-sm">3.3k gastos</p>
-                            </div>
-                        </div>
-                        <div class="text-right">
-                            <p class="text-white font-semibold">5,256</p>
-                            <p class="text-red-400 text-sm">-8%</p>
-                        </div>
-                    </div>
-
-                    <div class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
-                        <div class="flex items-center space-x-3">
-                            <div class="w-10 h-10 bg-red-600 rounded-lg flex items-center justify-center">
-                                <i class="fas fa-file-alt text-white"></i>
-                            </div>
-                            <div>
-                                <p class="text-white font-medium">Notas de Crédito</p>
-                                <p class="text-gray-400 text-sm">3.7k gastos</p>
-                            </div>
-                        </div>
-                        <div class="text-right">
-                            <p class="text-white font-semibold">6,965</p>
-                            <p class="text-green-400 text-sm">+15%</p>
-                        </div>
-                    </div>
-
-                    <div class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
-                        <div class="flex items-center space-x-3">
-                            <div class="w-10 h-10 bg-purple-600 rounded-lg flex items-center justify-center">
-                                <i class="fas fa-ellipsis-h text-white"></i>
-                            </div>
-                            <div>
-                                <p class="text-white font-medium">Otros</p>
-                                <p class="text-gray-400 text-sm">4.2k gastos</p>
-                            </div>
-                        </div>
-                        <div class="text-right">
-                            <p class="text-white font-semibold">8,532</p>
-                            <p class="text-green-400 text-sm">+25%</p>
-                        </div>
-                    </div>
+                    <?php endforeach; ?>
                 </div>
             </div>
         </div>
@@ -344,229 +404,183 @@
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
             
             <!-- Product Tracking / Recent Expenses -->
-            <div class="glass rounded-2xl p-6 card-hover fade-in">
+            <div class="glass rounded-2xl p-6 card-hover fade-in neon-border">
                 <div class="flex items-center justify-between mb-6">
-                    <h3 class="text-xl font-semibold text-white">Seguimiento de Gastos</h3>
+                    <h3 class="text-xl font-semibold text-white glow-text">Seguimiento de Gastos</h3>
                     <button class="text-purple-400 hover:text-purple-300 text-sm">Ver Todo</button>
                 </div>
-                
                 <div class="space-y-4">
+                    <?php
+                    $sql_seguimiento = "SELECT tipo_comprobante, fecha FROM gastos ORDER BY fecha DESC LIMIT 4";
+                    $stmt_seguimiento = $conn->prepare($sql_seguimiento);
+                    $stmt_seguimiento->execute();
+                    $seguimiento = $stmt_seguimiento->fetchAll(PDO::FETCH_ASSOC);
+                    foreach ($seguimiento as $index => $gasto):
+                        $icono = $index === 0 ? 'fa-receipt' : ($index === 1 ? 'fa-file-invoice' : ($index === 2 ? 'fa-money-bill' : 'fa-clock'));
+                        $color = $index === 0 ? 'bg-gradient-to-r from-purple-600 to-pink-600' : ($index === 1 ? 'bg-gradient-to-r from-blue-500 to-cyan-500' : ($index === 2 ? 'bg-gradient-to-r from-green-500 to-emerald-500' : 'bg-gradient-to-r from-red-500 to-orange-500'));
+                    ?>
                     <div class="flex items-center space-x-4">
-                        <div class="w-10 h-10 bg-purple-600 rounded-full flex items-center justify-center">
-                            <i class="fas fa-shopping-cart text-white text-sm"></i>
+                        <div class="w-10 h-10 <?php echo $color; ?> rounded-full flex items-center justify-center shadow-lg">
+                            <i class="fas <?php echo $icono; ?> text-white text-sm"></i>
                         </div>
                         <div class="flex-1">
                             <div class="flex items-center justify-between">
-                                <p class="text-white font-medium">5 gastos pendientes</p>
-                                <span class="text-gray-400 text-sm">Nov 02</span>
+                                <p class="text-white font-medium"><?php echo htmlspecialchars($gasto['tipo_comprobante']); ?></p>
+                                <span class="text-gray-400 text-sm"><?php echo date('M d', strtotime($gasto['fecha'])); ?></span>
                             </div>
-                            <p class="text-gray-400 text-sm">Entregado • hace 6 horas</p>
+                            <p class="text-gray-400 text-sm">Registrado • <?php echo date('H:i', strtotime($gasto['fecha'])); ?></p>
                         </div>
                     </div>
-
-                    <div class="flex items-center space-x-4">
-                        <div class="w-10 h-10 bg-purple-600 rounded-full flex items-center justify-center">
-                            <i class="fas fa-plus text-white text-sm"></i>
-                        </div>
-                        <div class="flex-1">
-                            <div class="flex items-center justify-between">
-                                <p class="text-white font-medium">Nueva orden recibida</p>
-                                <span class="text-gray-400 text-sm">Nov 03</span>
-                            </div>
-                            <p class="text-gray-400 text-sm">Recoger • hace 1 día</p>
-                        </div>
-                    </div>
-
-                    <div class="flex items-center space-x-4">
-                        <div class="w-10 h-10 bg-purple-600 rounded-full flex items-center justify-center">
-                            <i class="fas fa-user-tie text-white text-sm"></i>
-                        </div>
-                        <div class="flex-1">
-                            <div class="flex items-center justify-between">
-                                <p class="text-white font-medium">Manager Posteado</p>
-                                <span class="text-gray-400 text-sm">Nov 03</span>
-                            </div>
-                            <p class="text-gray-400 text-sm">En Tránsito • ayer</p>
-                        </div>
-                    </div>
-
-                    <div class="flex items-center space-x-4">
-                        <div class="w-10 h-10 bg-purple-600 rounded-full flex items-center justify-center">
-                            <i class="fas fa-clock text-white text-sm"></i>
-                        </div>
-                        <div class="flex-1">
-                            <div class="flex items-center justify-between">
-                                <p class="text-white font-medium">1 gasto pendiente</p>
-                                <span class="text-gray-400 text-sm">Nov 04</span>
-                            </div>
-                            <p class="text-gray-400 text-sm">hace 6 horas</p>
-                        </div>
-                    </div>
+                    <?php endforeach; ?>
                 </div>
-
-                <!-- Mini Chart -->
                 <div class="mt-6 h-24">
                     <canvas id="miniChart"></canvas>
                 </div>
             </div>
 
             <!-- Best Selling Products / Top Expenses -->
-            <div class="glass rounded-2xl p-6 card-hover fade-in">
+            <div class="glass rounded-2xl p-6 card-hover fade-in neon-border">
                 <div class="flex items-center justify-between mb-6">
-                    <h3 class="text-xl font-semibold text-white">Gastos Principales</h3>
+                    <h3 class="text-xl font-semibold text-white glow-text">Gastos Principales</h3>
                     <button class="text-purple-400 hover:text-purple-300">
                         <i class="fas fa-chevron-right"></i>
                     </button>
                 </div>
-
                 <div class="grid grid-cols-2 gap-4">
+                    <?php
+                    $sql_top_gastos = "SELECT tipo_comprobante, SUM(importe_total) AS total
+                                       FROM gastos
+                                       GROUP BY tipo_comprobante
+                                       ORDER BY total DESC LIMIT 2";
+                    $stmt_top_gastos = $conn->prepare($sql_top_gastos);
+                    $stmt_top_gastos->execute();
+                    $top_gastos = $stmt_top_gastos->fetchAll(PDO::FETCH_ASSOC);
+                    foreach ($top_gastos as $index => $gasto):
+                        $color = $index === 0 ? 'from-cyan-500 to-blue-600' : 'from-purple-500 to-pink-600';
+                        $icono = $index === 0 ? 'fa-receipt' : 'fa-file-invoice-dollar';
+                    ?>
                     <div class="relative group">
-                        <div class="bg-gradient-to-br from-cyan-500 to-blue-600 rounded-2xl p-4 h-48 flex flex-col justify-between overflow-hidden">
-                            <div class="absolute top-2 right-2 bg-green-500 text-white text-xs px-2 py-1 rounded-full">
+                        <div class="bg-gradient-to-br <?php echo $color; ?> rounded-2xl p-4 h-48 flex flex-col justify-between overflow-hidden shadow-xl">
+                            <div class="absolute top-2 right-2 bg-green-500 text-white text-xs px-2 py-1 rounded-full font-semibold">
                                 -15%
                             </div>
                             <div class="flex-1 flex items-center justify-center">
-                                <i class="fas fa-receipt text-white text-4xl opacity-20"></i>
+                                <i class="fas <?php echo $icono; ?> text-white text-4xl opacity-20"></i>
                             </div>
                             <div>
-                                <h4 class="text-white font-semibold text-sm mb-1">Boletas & Comprobantes</h4>
+                                <h4 class="text-white font-semibold text-sm mb-1"><?php echo htmlspecialchars($gasto['tipo_comprobante']); ?></h4>
                                 <div class="flex items-center justify-between">
-                                    <span class="text-gray-200 line-through text-xs">S/200</span>
-                                    <span class="text-white font-bold">S/140.00</span>
+                                    <span class="text-gray-200 line-through text-xs">S/<?php echo number_format($gasto['total'] * 1.15, 2); ?></span>
+                                    <span class="text-white font-bold">S/<?php echo number_format($gasto['total'], 2); ?></span>
                                 </div>
                                 <div class="flex text-yellow-400 text-xs mt-1">
                                     <i class="fas fa-star"></i>
                                     <i class="fas fa-star"></i>
                                     <i class="fas fa-star"></i>
                                     <i class="fas fa-star"></i>
-                                    <i class="fas fa-star"></i>
+                                    <i class="<?php echo $index === 0 ? 'fas fa-star' : 'far fa-star'; ?>"></i>
                                 </div>
-                                <button class="w-full bg-white/20 hover:bg-white/30 text-white text-xs py-2 rounded-lg mt-2 transition">
+                                <button class="w-full bg-white/20 hover:bg-white/30 text-white text-xs py-2 rounded-lg mt-2 transition font-semibold">
                                     <i class="fas fa-shopping-cart mr-1"></i> Ver Ahora
                                 </button>
                             </div>
                         </div>
                     </div>
-
-                    <div class="relative group">
-                        <div class="bg-gradient-to-br from-purple-500 to-pink-600 rounded-2xl p-4 h-48 flex flex-col justify-between overflow-hidden">
-                            <div class="flex-1 flex items-center justify-center">
-                                <i class="fas fa-file-invoice-dollar text-white text-4xl opacity-20"></i>
-                            </div>
-                            <div>
-                                <h4 class="text-white font-semibold text-sm mb-1">Facturas de Servicios</h4>
-                                <div class="flex items-center justify-between">
-                                    <span class="text-gray-200 line-through text-xs">S/320</span>
-                                    <span class="text-white font-bold">S/280.00</span>
-                                </div>
-                                <div class="flex text-yellow-400 text-xs mt-1">
-                                    <i class="fas fa-star"></i>
-                                    <i class="fas fa-star"></i>
-                                    <i class="fas fa-star"></i>
-                                    <i class="fas fa-star"></i>
-                                    <i class="far fa-star"></i>
-                                </div>
-                                <button class="w-full bg-white/20 hover:bg-white/30 text-white text-xs py-2 rounded-lg mt-2 transition">
-                                    <i class="fas fa-shopping-cart mr-1"></i> Ver Ahora
-                                </button>
-                            </div>
-                        </div>
-                    </div>
+                    <?php endforeach; ?>
                 </div>
             </div>
         </div>
 
-<!-- Data Table -->
-<div class="glass rounded-2xl p-6 card-hover fade-in">
-    <div class="flex items-center justify-between mb-6">
-        <h3 class="text-xl font-semibold text-white">Lista de Gastos Recientes</h3>
-        <div class="flex items-center space-x-4">
-            <input type="text" placeholder="Buscar gastos..." class="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-yellow-400">
-            <button onclick="exportData()" class="bg-yellow-400 hover:bg-yellow-500 text-black px-4 py-2 rounded-lg transition">
-                <i class="fas fa-download mr-2"></i>Exportar
-            </button>
+        <!-- Data Table -->
+        <div class="glass rounded-2xl p-6 card-hover fade-in neon-border">
+            <div class="flex items-center justify-between mb-6">
+                <h3 class="text-xl font-semibold text-white glow-text">Lista de Gastos Recientes</h3>
+                <div class="flex items-center space-x-4">
+                    <input type="text" placeholder="Buscar gastos..." class="bg-gray-800/50 border border-purple-500/30 rounded-lg px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500">
+                    <button onclick="exportData()" class="bg-gradient-to-r from-yellow-400 to-orange-500 hover:from-yellow-500 hover:to-orange-600 text-black px-4 py-2 rounded-lg transition font-semibold shadow-lg">
+                        <i class="fas fa-download mr-2"></i>Exportar
+                    </button>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full">
+                    <thead>
+                        <tr class="border-b border-purple-500/30">
+                            <th class="text-left text-gray-400 font-medium py-3 px-4">ID</th>
+                            <th class="text-left text-gray-400 font-medium py-3 px-4">Tipo</th>
+                            <th class="text-left text-gray-400 font-medium py-3 px-4">Serie</th>
+                            <th class="text-left text-gray-400 font-medium py-3 px-4">Cliente</th>
+                            <th class="text-left text-gray-400 font-medium py-3 px-4">Fecha</th>
+                            <th class="text-left text-gray-400 font-medium py-3 px-4">Moneda</th>
+                            <th class="text-left text-gray-400 font-medium py-3 px-4">Subtotal</th>
+                            <th class="text-left text-gray-400 font-medium py-3 px-4">IGV</th>
+                            <th class="text-left text-gray-400 font-medium py-3 px-4">Total</th>
+                            <th class="text-left text-gray-400 font-medium py-3 px-4">Imagen</th>
+                            <th class="text-left text-gray-400 font-medium py-3 px-4">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-purple-500/20" id="expensesTableBody">
+                        <?php
+                        $sql = "SELECT id, tipo_comprobante, serie_numero, nombre_cliente, fecha, moneda, subtotal, igv, importe_total, imagen_ruta 
+                                FROM gastos ORDER BY fecha DESC LIMIT 20";
+                        $stmt = $conn->prepare($sql);
+                        $stmt->execute();
+                        $gastos = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                        if (count($gastos) > 0):
+                            foreach ($gastos as $row):
+                        ?>
+                        <tr class="hover:bg-purple-500/10 transition">
+                            <td class="py-3 px-4 text-white">#<?php echo $row['id']; ?></td>
+                            <td class="py-3 px-4">
+                                <span class="bg-gradient-to-r from-blue-500 to-purple-500 text-white px-3 py-1 rounded-full text-xs font-semibold"><?php echo htmlspecialchars($row['tipo_comprobante']); ?></span>
+                            </td>
+                            <td class="py-3 px-4 text-gray-300"><?php echo htmlspecialchars($row['serie_numero']); ?></td>
+                            <td class="py-3 px-4 text-white font-medium"><?php echo htmlspecialchars($row['nombre_cliente']); ?></td>
+                            <td class="py-3 px-4 text-gray-300"><?php echo $row['fecha']; ?></td>
+                            <td class="py-3 px-4 text-gray-300"><?php echo htmlspecialchars($row['moneda']); ?></td>
+                            <td class="py-3 px-4 text-white">S/<?php echo number_format($row['subtotal'], 2); ?></td>
+                            <td class="py-3 px-4 text-white">S/<?php echo number_format($row['igv'], 2); ?></td>
+                            <td class="py-3 px-4 text-white font-semibold">S/<?php echo number_format($row['importe_total'], 2); ?></td>
+                            <td class="py-3 px-4">
+                                <button onclick="showImage('<?php echo htmlspecialchars($row['imagen_ruta']); ?>')" class="text-yellow-400 hover:text-yellow-300 transition">
+                                    <i class="fas fa-image"></i> Ver
+                                </button>
+                            </td>
+                            <td class="py-3 px-4">
+                                <div class="flex items-center space-x-2">
+                                    <button onclick="viewExpense(<?php echo $row['id']; ?>)" class="text-yellow-400 hover:text-yellow-300 transition" title="Ver detalles">
+                                        <i class="fas fa-eye"></i>
+                                    </button>
+                                    <button onclick="editExpense(<?php echo $row['id']; ?>)" class="text-blue-400 hover:text-blue-300 transition" title="Editar">
+                                        <i class="fas fa-edit"></i>
+                                    </button>
+                                    <button onclick="deleteExpense(<?php echo $row['id']; ?>)" class="text-red-400 hover:text-red-300 transition" title="Eliminar">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                        <?php
+                            endforeach;
+                        else:
+                        ?>
+                        <tr>
+                            <td colspan="11" class="text-center text-gray-400 py-4">No hay gastos registrados</td>
+                        </tr>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
-    
-    <div class="overflow-x-auto">
-        <table class="w-full">
-            <thead>
-                <tr class="border-b border-gray-700">
-                    <th class="text-left text-gray-400 font-medium py-3 px-4">ID</th>
-                    <th class="text-left text-gray-400 font-medium py-3 px-4">Tipo</th>
-                    <th class="text-left text-gray-400 font-medium py-3 px-4">Serie</th>
-                    <th class="text-left text-gray-400 font-medium py-3 px-4">Cliente</th>
-                    <th class="text-left text-gray-400 font-medium py-3 px-4">Fecha</th>
-                    <th class="text-left text-gray-400 font-medium py-3 px-4">Moneda</th>
-                    <th class="text-left text-gray-400 font-medium py-3 px-4">Subtotal</th>
-                    <th class="text-left text-gray-400 font-medium py-3 px-4">IGV</th>
-                    <th class="text-left text-gray-400 font-medium py-3 px-4">Total</th>
-                    <th class="text-left text-gray-400 font-medium py-3 px-4">Imagen</th>
-                    <th class="text-left text-gray-400 font-medium py-3 px-4">Acciones</th>
-                </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-700" id="expensesTableBody">
-                <?php
-                include 'config.php';
-
-                $sql = "SELECT id, tipo_comprobante, serie_numero, nombre_cliente, fecha, moneda, subtotal, igv, importe_total, imagen_ruta 
-                        FROM gastos ORDER BY fecha DESC LIMIT 20";
-                $stmt = $conn->prepare($sql);
-                $stmt->execute();
-                $gastos = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-                if (count($gastos) > 0):
-                    foreach ($gastos as $row):
-                ?>
-                <tr class="hover:bg-gray-800/30 transition">
-                    <td class="py-3 px-4 text-white">#<?= $row['id'] ?></td>
-                    <td class="py-3 px-4">
-                        <span class="bg-blue-500/20 text-blue-400 px-2 py-1 rounded-full text-xs"><?= $row['tipo_comprobante'] ?></span>
-                    </td>
-                    <td class="py-3 px-4 text-gray-300"><?= $row['serie_numero'] ?></td>
-                    <td class="py-3 px-4 text-white"><?= $row['nombre_cliente'] ?></td>
-                    <td class="py-3 px-4 text-gray-300"><?= $row['fecha'] ?></td>
-                    <td class="py-3 px-4 text-gray-300"><?= $row['moneda'] ?></td>
-                    <td class="py-3 px-4 text-white">S/<?= number_format($row['subtotal'],2) ?></td>
-                    <td class="py-3 px-4 text-white">S/<?= number_format($row['igv'],2) ?></td>
-                    <td class="py-3 px-4 text-white font-semibold">S/<?= number_format($row['importe_total'],2) ?></td>
-                    <td class="py-3 px-4">
-                        <button onclick="showImage('<?= $row['imagen_ruta'] ?>')" class="text-yellow-400 hover:text-yellow-300">
-                            <i class="fas fa-image"></i> Ver
-                        </button>
-                        <td class="py-3 px-4">
-    <div class="flex items-center space-x-2">
-        <button onclick="viewExpense(<?= $row['id'] ?>)" class="text-yellow-400 hover:text-yellow-300" title="Ver detalles">
-            <i class="fas fa-eye"></i>
-        </button>
-        <button onclick="editExpense(<?= $row['id'] ?>)" class="text-blue-400 hover:text-blue-300" title="Editar">
-            <i class="fas fa-edit"></i>
-        </button>
-        <button onclick="deleteExpense(<?= $row['id'] ?>)" class="text-red-400 hover:text-red-300" title="Eliminar">
-            <i class="fas fa-trash"></i>
-        </button>
-    </div>
-</td>
-                </tr>
-                <?php
-                    endforeach;
-                else:
-                ?>
-                <tr>
-                    <td colspan="11" class="text-center text-gray-400 py-4">No hay gastos registrados</td>
-                </tr>
-                <?php endif; ?>
-            </tbody>
-        </table>
-    </div>
-</div>
 
     <!-- Modal para mostrar imágenes -->
     <div id="imageModal" class="modal">
         <div class="modal-content">
             <span class="close-modal" onclick="closeImageModal()">&times;</span>
             <div class="text-center">
-                <h3 class="text-lg font-semibold text-yellow-400 mb-4">Vista Previa del Comprobante</h3>
+                <h3 class="text-lg font-semibold text-yellow-400 mb-4 glow-text">Vista Previa del Comprobante</h3>
                 <img id="modalImage" src="" alt="Comprobante" class="max-w-full h-auto">
             </div>
         </div>
@@ -576,37 +590,59 @@
     <div id="detailModal" class="modal">
         <div class="modal-content">
             <span class="close-modal" onclick="closeDetailModal()">&times;</span>
-            <h3 id="detailTitle" class="text-lg font-semibold text-yellow-400 mb-4">Detalles del Gasto</h3>
+            <h3 id="detailTitle" class="text-lg font-semibold text-yellow-400 mb-4 glow-text">Detalles del Gasto</h3>
             <div id="detailValues" class="text-white"></div>
         </div>
     </div>
 
     <!-- Scripts -->
     <script>
-        // Data for charts - Replace with your PHP data
+        // Data for charts
         const expensesData = {
-            labels: ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul'],
+            labels: <?php echo $labels_json; ?>,
             datasets: [{
-                label: 'Gastos 2024',
-                data: [9542, 8200, 7800, 9100, 8500, 7200, 6800],
-                backgroundColor: 'rgba(251, 191, 36, 0.1)',
-                borderColor: 'rgb(251, 191, 36)',
-                borderWidth: 3,
-                fill: true,
-                tension: 0.4,
-                pointBackgroundColor: 'rgb(251, 191, 36)',
-                pointBorderColor: 'rgb(251, 191, 36)',
-                pointHoverBackgroundColor: '#fff',
-                pointHoverBorderColor: 'rgb(251, 191, 36)'
+                label: 'Gastos 2025',
+                data: <?php echo $data_json; ?>,
+                backgroundColor: [
+                    'rgba(139, 92, 246, 0.8)',
+                    'rgba(59, 130, 246, 0.8)',
+                    'rgba(16, 185, 129, 0.8)',
+                    'rgba(251, 191, 36, 0.8)',
+                    'rgba(239, 68, 68, 0.8)',
+                    'rgba(236, 72, 153, 0.8)',
+                    'rgba(20, 184, 166, 0.8)',
+                    'rgba(168, 85, 247, 0.8)',
+                    'rgba(249, 115, 22, 0.8)',
+                    'rgba(34, 197, 94, 0.8)',
+                    'rgba(99, 102, 241, 0.8)',
+                    'rgba(244, 63, 94, 0.8)'
+                ],
+                borderColor: [
+                    'rgb(139, 92, 246)',
+                    'rgb(59, 130, 246)',
+                    'rgb(16, 185, 129)',
+                    'rgb(251, 191, 36)',
+                    'rgb(239, 68, 68)',
+                    'rgb(236, 72, 153)',
+                    'rgb(20, 184, 166)',
+                    'rgb(168, 85, 247)',
+                    'rgb(249, 115, 22)',
+                    'rgb(34, 197, 94)',
+                    'rgb(99, 102, 241)',
+                    'rgb(244, 63, 94)'
+                ],
+                borderWidth: 2,
+                borderRadius: 8,
+                borderSkipped: false,
             }]
         };
 
         const miniChartData = {
-            labels: ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun'],
+            labels: <?php echo $mini_labels_json; ?>,
             datasets: [{
-                data: [30, 25, 36, 30, 45, 35],
+                data: <?php echo $mini_data_json; ?>,
                 borderColor: 'rgb(168, 85, 247)',
-                backgroundColor: 'rgba(168, 85, 247, 0.1)',
+                backgroundColor: 'rgba(168, 85, 247, 0.2)',
                 borderWidth: 2,
                 fill: true,
                 tension: 0.4,
@@ -614,10 +650,10 @@
             }]
         };
 
-        // Main Chart Configuration
+        // Main Chart Configuration (BARRAS)
         const ctx = document.getElementById('expensesChart').getContext('2d');
         const expensesChart = new Chart(ctx, {
-            type: 'line',
+            type: 'bar',
             data: expensesData,
             options: {
                 responsive: true,
@@ -627,23 +663,33 @@
                         display: false
                     },
                     tooltip: {
-                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                        backgroundColor: 'rgba(15, 12, 41, 0.95)',
                         titleColor: 'white',
                         bodyColor: 'white',
-                        borderColor: 'rgb(251, 191, 36)',
-                        borderWidth: 1,
-                        cornerRadius: 8
+                        borderColor: 'rgb(139, 92, 246)',
+                        borderWidth: 2,
+                        cornerRadius: 10,
+                        padding: 12,
+                        displayColors: true,
+                        callbacks: {
+                            label: function(context) {
+                                return 'Total: S/' + context.parsed.y.toLocaleString('es-PE', {minimumFractionDigits: 2});
+                            }
+                        }
                     }
                 },
                 scales: {
                     y: {
                         beginAtZero: true,
                         grid: {
-                            color: 'rgba(255, 255, 255, 0.1)',
+                            color: 'rgba(139, 92, 246, 0.1)',
                             drawBorder: false
                         },
                         ticks: {
                             color: 'rgba(255, 255, 255, 0.7)',
+                            font: {
+                                size: 12
+                            },
                             callback: function(value) {
                                 return 'S/' + value.toLocaleString();
                             }
@@ -651,18 +697,16 @@
                     },
                     x: {
                         grid: {
-                            color: 'rgba(255, 255, 255, 0.1)',
+                            display: false,
                             drawBorder: false
                         },
                         ticks: {
-                            color: 'rgba(255, 255, 255, 0.7)'
+                            color: 'rgba(255, 255, 255, 0.7)',
+                            font: {
+                                size: 12,
+                                weight: 'bold'
+                            }
                         }
-                    }
-                },
-                elements: {
-                    point: {
-                        radius: 4,
-                        hoverRadius: 8
                     }
                 },
                 interaction: {
@@ -704,6 +748,26 @@
             }
         });
 
+        // Actualizar gráfico según período
+        document.getElementById('chartPeriod').addEventListener('change', function(e) {
+            const period = e.target.value.toLowerCase();
+            fetch(`acciones_gasto.php`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: `action=chart_data&period=${period}`
+            })
+            .then(res => res.json())
+            .then(data => {
+                expensesChart.data.labels = data.labels;
+                expensesChart.data.datasets[0].data = data.data;
+                expensesChart.update();
+                showNotification('Gráfico actualizado', 'success');
+            })
+            .catch(error => {
+                showNotification('Error al actualizar el gráfico', 'error');
+            });
+        });
+
         // Modal Functions
         function showImage(imageSrc) {
             const modal = document.getElementById('imageModal');
@@ -734,38 +798,108 @@
             }
         }
 
+        // View Expense
+        function viewExpense(id) {
+            fetch("acciones_gasto.php", {
+                method: "POST",
+                headers: {"Content-Type": "application/x-www-form-urlencoded"},
+                body: `action=view&id=${id}`
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    showNotification(data.error, 'error');
+                } else {
+                    const modal = document.getElementById('detailModal');
+                    const detailValues = document.getElementById('detailValues');
+                    detailValues.innerHTML = `
+                        <div class="space-y-3">
+                            <p class="flex justify-between border-b border-purple-500/20 pb-2"><strong class="text-purple-400">ID:</strong> <span>${data.id}</span></p>
+                            <p class="flex justify-between border-b border-purple-500/20 pb-2"><strong class="text-purple-400">Tipo:</strong> <span>${data.tipo_comprobante}</span></p>
+                            <p class="flex justify-between border-b border-purple-500/20 pb-2"><strong class="text-purple-400">Serie:</strong> <span>${data.serie_numero}</span></p>
+                            <p class="flex justify-between border-b border-purple-500/20 pb-2"><strong class="text-purple-400">Cliente:</strong> <span>${data.nombre_cliente}</span></p>
+                            <p class="flex justify-between border-b border-purple-500/20 pb-2"><strong class="text-purple-400">Fecha:</strong> <span>${data.fecha}</span></p>
+                            <p class="flex justify-between border-b border-purple-500/20 pb-2"><strong class="text-purple-400">Moneda:</strong> <span>${data.moneda}</span></p>
+                            <p class="flex justify-between border-b border-purple-500/20 pb-2"><strong class="text-purple-400">Subtotal:</strong> <span class="text-green-400">S/${parseFloat(data.subtotal).toFixed(2)}</span></p>
+                            <p class="flex justify-between border-b border-purple-500/20 pb-2"><strong class="text-purple-400">IGV:</strong> <span class="text-yellow-400">S/${parseFloat(data.igv).toFixed(2)}</span></p>
+                            <p class="flex justify-between"><strong class="text-purple-400">Total:</strong> <span class="text-xl font-bold text-green-400">S/${parseFloat(data.importe_total).toFixed(2)}</span></p>
+                        </div>
+                    `;
+                    modal.style.display = 'block';
+                }
+            })
+            .catch(error => {
+                showNotification('Error al cargar los detalles', 'error');
+            });
+        }
+
+        // Delete Expense
+        function deleteExpense(id) {
+            if (confirm("¿Seguro que quieres eliminar este gasto?")) {
+                fetch("acciones_gasto.php", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/x-www-form-urlencoded"},
+                    body: `action=delete&id=${id}`
+                })
+                .then(res => res.text())
+                .then(data => {
+                    if (data === "ok") {
+                        showNotification("Gasto eliminado correctamente", "success");
+                        location.reload();
+                    } else {
+                        showNotification("Error al eliminar: " + data, "error");
+                    }
+                });
+            }
+        }
+
+        // Edit Expense
+        function editExpense(id) {
+            let nombre = prompt("Nuevo nombre del cliente:");
+            let total = prompt("Nuevo importe total:");
+            if (nombre && total) {
+                fetch("acciones_gasto.php", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/x-www-form-urlencoded"},
+                    body: `action=edit&id=${id}&nombre_cliente=${encodeURIComponent(nombre)}&importe_total=${total}`
+                })
+                .then(res => res.text())
+                .then(data => {
+                    if (data === "ok") {
+                        showNotification("Gasto actualizado correctamente", "success");
+                        location.reload();
+                    } else {
+                        showNotification("Error al actualizar: " + data, "error");
+                    }
+                });
+            }
+        }
+
         // Export function
         function exportData() {
-            // Simulate export functionality
-            const csvContent = "data:text/csv;charset=utf-8,";
-            const headers = ["ID", "Tipo", "Serie", "Cliente", "Fecha", "Moneda", "Subtotal", "IGV", "Total"];
-            const rows = [
-                ["#001", "Boleta", "B001-123", "Juan Pérez", "2024-01-15", "PEN", "106.36", "19.14", "125.50"],
-                ["#002", "Factura", "F001-456", "María García", "2024-01-14", "PEN", "76.26", "13.73", "89.99"],
-                ["#003", "Recibo", "R001-789", "Carlos López", "2024-01-13", "USD", "169.49", "30.51", "200.00"]
-            ];
-            
-            let csv = csvContent + headers.join(",") + "\n";
-            rows.forEach(row => {
-                csv += row.join(",") + "\n";
+            fetch('acciones_gasto.php', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: 'action=export'
+            })
+            .then(res => res.text())
+            .then(data => {
+                const link = document.createElement('a');
+                link.href = 'data:text/csv;charset=utf-8,' + encodeURI(data);
+                link.download = 'gastos_reporte.csv';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                showNotification('Datos exportados correctamente', 'success');
+            })
+            .catch(error => {
+                showNotification('Error al exportar datos', 'error');
             });
-            
-            const encodedUri = encodeURI(csv);
-            const link = document.createElement("a");
-            link.setAttribute("href", encodedUri);
-            link.setAttribute("download", "gastos_reporte.csv");
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            
-            // Show success message
-            showNotification('Datos exportados correctamente', 'success');
         }
 
         // Generate Report function
         function generateReport() {
             showNotification('Generando reporte...', 'info');
-            // Simulate report generation
             setTimeout(() => {
                 showNotification('Reporte generado exitosamente', 'success');
             }, 2000);
@@ -774,33 +908,29 @@
         // Notification system
         function showNotification(message, type = 'info') {
             const notification = document.createElement('div');
-            notification.className = `fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg glass fade-in max-w-sm`;
-            
+            notification.className = `fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg glass fade-in max-w-sm border-2`;
             const colors = {
                 success: 'border-green-500 text-green-400',
                 error: 'border-red-500 text-red-400',
                 info: 'border-blue-500 text-blue-400',
                 warning: 'border-yellow-500 text-yellow-400'
             };
-            
             const icons = {
                 success: 'fas fa-check-circle',
                 error: 'fas fa-times-circle',
                 info: 'fas fa-info-circle',
                 warning: 'fas fa-exclamation-triangle'
             };
-            
             notification.innerHTML = `
                 <div class="flex items-center space-x-3 ${colors[type]}">
-                    <i class="${icons[type]}"></i>
-                    <span>${message}</span>
+                    <i class="${icons[type]} text-xl"></i>
+                    <span class="font-medium">${message}</span>
                 </div>
             `;
-            
             document.body.appendChild(notification);
-            
             setTimeout(() => {
                 notification.style.opacity = '0';
+                notification.style.transform = 'translateX(100%)';
                 setTimeout(() => {
                     document.body.removeChild(notification);
                 }, 300);
@@ -810,11 +940,10 @@
         // Add hover effects to cards
         document.querySelectorAll('.card-hover').forEach(card => {
             card.addEventListener('mouseenter', function() {
-                this.style.transform = 'translateY(-5px)';
+                this.style.transform = 'translateY(-8px) scale(1.02)';
             });
-            
             card.addEventListener('mouseleave', function() {
-                this.style.transform = 'translateY(0)';
+                this.style.transform = 'translateY(0) scale(1)';
             });
         });
 
@@ -824,7 +953,6 @@
             searchInput.addEventListener('input', function(e) {
                 const searchTerm = e.target.value.toLowerCase();
                 const tableRows = document.querySelectorAll('#expensesTableBody tr');
-                
                 tableRows.forEach(row => {
                     const text = row.textContent.toLowerCase();
                     if (text.includes(searchTerm)) {
@@ -843,7 +971,7 @@
                 if (!startTimestamp) startTimestamp = timestamp;
                 const progress = Math.min((timestamp - startTimestamp) / duration, 1);
                 const value = Math.floor(progress * (end - start) + start);
-                element.innerHTML = 'S/' + value.toLocaleString() + '.00';
+                element.innerHTML = 'S/' + value.toLocaleString('es-PE', {minimumFractionDigits: 2, maximumFractionDigits: 2});
                 if (progress < 1) {
                     window.requestAnimationFrame(step);
                 }
@@ -853,128 +981,30 @@
 
         // Initialize animations when page loads
         window.addEventListener('load', function() {
-            // Animate the main revenue number
             const revenueElement = document.querySelector('.text-3xl.font-bold.text-white.mb-2');
             if (revenueElement) {
-                animateValue(revenueElement, 0, 9542, 2000);
+                const totalValue = <?php echo (int)$total_gastos; ?>;
+                animateValue(revenueElement, 0, totalValue, 2000);
             }
-            
             console.log('Dashboard cargado exitosamente!');
             showNotification('Dashboard cargado correctamente', 'success');
         });
 
-        // Update chart data (you can call this function to update with real PHP data)
-        function updateChartData(newLabels, newData) {
-            expensesChart.data.labels = newLabels;
-            expensesChart.data.datasets[0].data = newData;
-            expensesChart.update();
-        }
-
-        // Function to add new expense to table (you can use this with PHP)
-        function addExpenseToTable(expense) {
-            const tableBody = document.getElementById('expensesTableBody');
-            const row = document.createElement('tr');
-            row.className = 'hover:bg-gray-800/30 transition';
-            
-            row.innerHTML = `
-                <td class="py-3 px-4 text-white">#${expense.id}</td>
-                <td class="py-3 px-4">
-                    <span class="bg-blue-500/20 text-blue-400 px-2 py-1 rounded-full text-xs">${expense.tipo}</span>
-                </td>
-                <td class="py-3 px-4 text-gray-300">${expense.serie}</td>
-                <td class="py-3 px-4 text-white">${expense.cliente}</td>
-                <td class="py-3 px-4 text-gray-300">${expense.fecha}</td>
-                <td class="py-3 px-4 text-gray-300">${expense.moneda}</td>
-                <td class="py-3 px-4 text-white">S/${expense.subtotal}</td>
-                <td class="py-3 px-4 text-white">S/${expense.igv}</td>
-                <td class="py-3 px-4 text-white font-semibold">S/${expense.total}</td>
-                <td class="py-3 px-4">
-                    <button onclick="showImage('${expense.imagen}')" class="text-yellow-400 hover:text-yellow-300">
-                        <i class="fas fa-image"></i> Ver
-                    </button>
-                </td>
-                <td class="py-3 px-4">
-                    <div class="flex items-center space-x-2">
-                        <button class="text-yellow-400 hover:text-yellow-300" title="Ver detalles">
-                            <i class="fas fa-eye"></i>
-                        </button>
-                        <button class="text-blue-400 hover:text-blue-300" title="Editar">
-                            <i class="fas fa-edit"></i>
-                        </button>
-                        <button class="text-red-400 hover:text-red-300" title="Eliminar">
-                            <i class="fas fa-trash"></i>
-                        </button>
-                    </div>
-                </td>
-            `;
-            
-            tableBody.appendChild(row);
-        }
-
         // Keyboard shortcuts
         document.addEventListener('keydown', function(e) {
-            // Ctrl + N for new expense
             if (e.ctrlKey && e.key === 'n') {
                 e.preventDefault();
                 window.location.href = 'sesion.php';
             }
-            
-            // Ctrl + E for export
             if (e.ctrlKey && e.key === 'e') {
                 e.preventDefault();
                 exportData();
             }
-            
-            // Escape to close modals
             if (e.key === 'Escape') {
                 closeImageModal();
                 closeDetailModal();
             }
         });
-
-        // Auto-refresh data every 5 minutes (optional)
-        setInterval(function() {
-            // You can uncomment this to enable auto-refresh
-            // location.reload();
-            console.log('Auto-refresh check...');
-        }, 300000); // 5 minutes
-
-
-function deleteExpense(id) {
-    if (confirm("¿Seguro que quieres eliminar este gasto?")) {
-        fetch("acciones_gasto.php", {
-            method: "POST",
-            headers: {"Content-Type": "application/x-www-form-urlencoded"},
-            body: "action=delete&id=" + id
-        }).then(res => res.text()).then(data => {
-            if (data === "ok") {
-                alert("Gasto eliminado correctamente");
-                location.reload();
-            } else {
-                alert("Error al eliminar");
-            }
-        });
-    }
-}
-
-function editExpense(id) {
-    let nombre = prompt("Nuevo nombre del cliente:");
-    let total = prompt("Nuevo importe total:");
-    if (nombre && total) {
-        fetch("acciones_gasto.php", {
-            method: "POST",
-            headers: {"Content-Type": "application/x-www-form-urlencoded"},
-            body: `action=edit&id=${id}&nombre_cliente=${encodeURIComponent(nombre)}&importe_total=${total}`
-        }).then(res => res.text()).then(data => {
-            if (data === "ok") {
-                alert("Gasto actualizado correctamente");
-                location.reload();
-            } else {
-                alert("Error al actualizar");
-            }
-        });
-    }
-}
-</script>
+    </script>
 </body>
 </html>
